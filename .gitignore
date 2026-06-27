@@ -1,0 +1,42 @@
+# CodeIgniter
+/vendor/
+/writable/cache/*
+/writable/logs/*
+/writable/session/*
+/writable/uploads/*
+/system/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# OS
+Thumbs.db
+.DS_Store
+
+# PHP
+*.php~
+*.phtml
+
+# Node (if using)
+node_modules/
+npm-debug.log
+
+# Composer
+composer.lock
+
+# Public uploads
+/public/uploads/*
+
+# Documentation
+PERMISSION_IMPLEMENTATION.md
+ACCESS_CONTROL.md
