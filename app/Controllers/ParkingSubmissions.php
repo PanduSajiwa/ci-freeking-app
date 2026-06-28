@@ -24,21 +24,20 @@ class ParkingSubmissions extends BaseController
     {
         $userRole = session()->get('role');
         $userId = session()->get('user_id');
-        
+
         $builder = $this->submissionModel->builder();
-        $builder->select('parking_submissions.*, customers.full_name as customer_name, vehicles.license_plate')
-                ->join('customers', 'customers.id = parking_submissions.customer_id')
+        $builder->select('parking_submissions.*, vehicles.license_plate')
                 ->join('vehicles', 'vehicles.id = parking_submissions.vehicle_id');
-        
+
         if ($userRole === 'employee') {
             $builder->where('parking_submissions.submitted_by', $userId);
         }
-        
+
         $data = [
             'title' => 'Pengajuan Free Parking',
             'submissions' => $builder->get()->getResultArray()
         ];
-        
+
         return view('parking_submissions/index', $data);
     }
     
@@ -50,63 +49,166 @@ class ParkingSubmissions extends BaseController
         }
 
         if (strtolower($this->request->getMethod()) === 'post') {
-            // Handle file uploads
-            $idCardImage = $this->uploadImage('id_card_image');
-            $vehicleImage = $this->uploadImage('vehicle_image');
-            $supportingDoc = $this->uploadImage('supporting_doc_image');
-            
+            $userId = session()->get('user_id');
+            $userRole = session()->get('role');
             $submissionCode = 'FP' . date('YmdHis');
 
-            // Enforce per-employee monthly limit: max 3 submissions per calendar month
-            $userId = session()->get('user_id');
-            if (session()->get('role') === 'employee') {
+            // Check monthly limit for employees (3 per month)
+            if ($userRole === 'employee') {
                 $firstDay = date('Y-m-01');
                 $lastDay = date('Y-m-t');
                 $builder = $this->submissionModel->builder();
                 $count = $builder->where('submitted_by', $userId)
                                  ->where('submission_date >=', $firstDay)
                                  ->where('submission_date <=', $lastDay)
+                                 ->whereNotIn('status', ['rejected'])
                                  ->countAllResults();
 
                 if (intval($count) >= 3) {
-                    return redirect()->back()->with('error', 'Batas pengajuan bulanan tercapai (maks 3 pengajuan per bulan).');
+                    session()->setFlashdata('post_data', $this->request->getPost());
+                    return redirect()->back()->with('error', 'Batas pengajuan bulanan tercapai (maks 3 pengajuan per bulan). Silakan coba bulan depan.');
                 }
             }
-            
-            $data = [
-                'submission_code' => $submissionCode,
-                'customer_id' => $this->request->getPost('customer_id'),
-                'vehicle_id' => $this->request->getPost('vehicle_id'),
-                'submitted_by' => session()->get('user_id'),
-                'submission_date' => date('Y-m-d'),
-                'duration_days' => $this->request->getPost('duration_days'),
-                'purpose' => $this->request->getPost('purpose'),
-                'id_card_image' => $idCardImage,
-                'vehicle_image' => $vehicleImage,
-                'supporting_doc_image' => $supportingDoc,
-                'status' => 'submitted'
-            ];
-            
-            if ($this->submissionModel->insert($data)) {
-                return redirect()->to('/parkingsubmissions')->with('success', 'Pengajuan berhasil dikirim');
+
+            if ($userRole === 'employee') {
+                // Employee: Manual entry mode
+                $employeeName = session()->get('full_name');
+                $licensePlate = trim(strtoupper($this->request->getPost('license_plate') ?? ''));
+                $vehicleBrand = trim($this->request->getPost('vehicle_brand') ?? '');
+                $vehicleModel = trim($this->request->getPost('vehicle_model') ?? '');
+                $vehicleType = $this->request->getPost('vehicle_type') ?? 'car';
+                $vehicleColor = trim($this->request->getPost('vehicle_color') ?? '');
+                $durationDays = intval($this->request->getPost('duration_days') ?? 1);
+                $purpose = trim($this->request->getPost('purpose') ?? 'Ajukan Parkir');
+
+                log_message('info', "Employee submission attempt - user: $userId, plate: $licensePlate, brand: $vehicleBrand");
+
+                // Get or create customer
+                try {
+                    $db = \Config\Database::connect();
+                    $existingCustomer = $db->query(
+                        'SELECT id FROM customers WHERE LOWER(full_name) = LOWER(?) AND created_by = ?',
+                        [$employeeName, $userId]
+                    )->getRow();
+
+                    if ($existingCustomer) {
+                        $customerId = $existingCustomer->id;
+                    } else {
+                        $customerId = $this->customerModel->insert([
+                            'full_name' => $employeeName,
+                            'company' => session()->get('company') ?? 'Unknown',
+                            'created_by' => $userId
+                        ], true);
+
+                        if (!$customerId) {
+                            log_message('error', "Failed to create customer for user $userId: " . $this->customerModel->errors());
+                            throw new \Exception('Gagal membuat data karyawan');
+                        }
+                    }
+                    log_message('info', "Customer ID for submission: $customerId");
+
+                    // Get or create vehicle
+                    $existingVehicle = $db->query(
+                        'SELECT id FROM vehicles WHERE license_plate = ? AND created_by = ?',
+                        [$licensePlate, $userId]
+                    )->getRow();
+
+                    if ($existingVehicle) {
+                        $vehicleId = $existingVehicle->id;
+                    } else {
+                        $vehicleId = $this->vehicleModel->insert([
+                            'license_plate' => $licensePlate,
+                            'vehicle_type' => $vehicleType,
+                            'brand' => $vehicleBrand,
+                            'model' => $vehicleModel,
+                            'color' => $vehicleColor,
+                            'created_by' => $userId
+                        ], true);
+
+                        if (!$vehicleId) {
+                            log_message('error', "Failed to create vehicle for user $userId: " . $this->vehicleModel->errors());
+                            throw new \Exception('Gagal membuat data kendaraan');
+                        }
+                    }
+                    log_message('info', "Vehicle ID for submission: $vehicleId");
+
+                    // Optional file upload
+                    $parkingTicket = $this->uploadImage('parking_ticket');
+
+                    $data = [
+                        'submission_code' => $submissionCode,
+                        'customer_id' => $customerId,
+                        'vehicle_id' => $vehicleId,
+                        'submitted_by' => $userId,
+                        'submission_date' => date('Y-m-d'),
+                        'duration_days' => $durationDays,
+                        'purpose' => $purpose,
+                        'supporting_doc_image' => $parkingTicket,
+                        'status' => 'submitted'
+                    ];
+
+                } catch (\Exception $e) {
+                    log_message('error', "Employee submission exception: " . $e->getMessage());
+                    session()->setFlashdata('post_data', $this->request->getPost());
+                    return redirect()->back()->with('error', $e->getMessage());
+                }
             } else {
-                return redirect()->back()->with('error', 'Gagal mengajukan free parking');
+                // Admin/Non-Employee: Dropdown selection mode
+                $idCardImage = $this->uploadImage('id_card_image');
+                $vehicleImage = $this->uploadImage('vehicle_image');
+                $supportingDoc = $this->uploadImage('supporting_doc_image');
+
+                $data = [
+                    'submission_code' => $submissionCode,
+                    'customer_id' => $this->request->getPost('customer_id'),
+                    'vehicle_id' => $this->request->getPost('vehicle_id'),
+                    'submitted_by' => $userId,
+                    'submission_date' => date('Y-m-d'),
+                    'duration_days' => $this->request->getPost('duration_days'),
+                    'purpose' => $this->request->getPost('purpose'),
+                    'id_card_image' => $idCardImage,
+                    'vehicle_image' => $vehicleImage,
+                    'supporting_doc_image' => $supportingDoc,
+                    'status' => 'submitted'
+                ];
+            }
+
+            try {
+                log_message('info', "Inserting submission with data: " . json_encode($data));
+                $submissionId = $this->submissionModel->insert($data, true);
+
+                if ($submissionId) {
+                    log_message('info', "Submission created successfully - ID: $submissionId");
+                    return redirect()->to('/parkingsubmissions')->with('success', 'Pengajuan berhasil dikirim. Data Anda telah tersimpan dengan baik.');
+                } else {
+                    log_message('error', "Submission insert returned false. Errors: " . json_encode($this->submissionModel->errors()));
+                    session()->setFlashdata('post_data', $this->request->getPost());
+                    return redirect()->back()->with('error', 'Gagal menyimpan pengajuan: ' . json_encode($this->submissionModel->errors()));
+                }
+            } catch (\Exception $e) {
+                log_message('error', "Submission exception: " . $e->getMessage());
+                session()->setFlashdata('post_data', $this->request->getPost());
+                return redirect()->back()->with('error', 'Error: ' . $e->getMessage());
             }
         }
         
         // For employees, show only their own customers/vehicles
-        if (session()->get('role') === 'employee') {
-            $userId = session()->get('user_id');
+        $userRole = session()->get('role');
+        $userId = session()->get('user_id');
+        $userName = session()->get('full_name');
+
+        if ($userRole === 'employee') {
             $customers = $this->customerModel->where('created_by', $userId)->findAll();
             $vehicles = $this->vehicleModel->where('created_by', $userId)->findAll();
-            
-            // Count current month submissions for the employee
+
+            // Count current month submissions for the employee (excluding rejected)
             $firstDay = date('Y-m-01');
             $lastDay = date('Y-m-t');
             $builder = $this->submissionModel->builder();
             $submissionCount = $builder->where('submitted_by', $userId)
                                         ->where('submission_date >=', $firstDay)
                                         ->where('submission_date <=', $lastDay)
+                                        ->whereNotIn('status', ['rejected'])
                                         ->countAllResults();
         } else {
             $customers = $this->customerModel->findAll();
@@ -120,7 +222,8 @@ class ParkingSubmissions extends BaseController
             'vehicles' => $vehicles,
             'submissionCount' => $submissionCount,
             'submissionLimit' => 3,
-            'isEmployee' => session()->get('role') === 'employee'
+            'isEmployee' => $userRole === 'employee',
+            'userName' => $userName
         ];
         
         return view('parking_submissions/create', $data);
@@ -128,27 +231,38 @@ class ParkingSubmissions extends BaseController
     
     public function approve($id)
     {
-        // Only Operation Manager and Admin can approve
+        // Only Operation Manager, Admin, and Parking Dept can approve
         if (!PermissionHelper::canApprove()) {
             throw \CodeIgniter\Exceptions\PageNotFoundException::forPageNotFound();
         }
 
         $userRole = session()->get('role');
-        $data = [
-            'status' => 'approved'
-        ];
-        
+        $submission = $this->submissionModel->find($id);
+
+        $data = [];
+
         if ($userRole === 'operation_manager') {
             $data['operation_manager_approval'] = 'approved';
             $data['operation_manager_id'] = session()->get('user_id');
             $data['operation_manager_approval_date'] = date('Y-m-d H:i:s');
-        } elseif ($userRole === 'admin') {
+        } elseif ($userRole === 'admin' || $userRole === 'parking_dept') {
             $data['parking_dept_approval'] = 'approved';
             $data['parking_dept_id'] = session()->get('user_id');
             $data['parking_dept_approval_date'] = date('Y-m-d H:i:s');
             $data['quota_given'] = $this->request->getPost('quota_given');
         }
-        
+
+        // Set final status only when BOTH have approved
+        $managerApproval = $data['operation_manager_approval'] ?? $submission['operation_manager_approval'];
+        $parkingApproval = $data['parking_dept_approval'] ?? $submission['parking_dept_approval'];
+
+        if ($managerApproval == 'approved' && $parkingApproval == 'approved') {
+            $data['status'] = 'approved';
+        } elseif ($data) {
+            // One person approved, set status to under_review
+            $data['status'] = 'under_review';
+        }
+
         if ($this->submissionModel->update($id, $data)) {
             return redirect()->back()->with('success', 'Pengajuan berhasil disetujui');
         } else {
@@ -158,30 +272,31 @@ class ParkingSubmissions extends BaseController
     
     public function reject($id)
     {
-        // Only Operation Manager and Admin can reject
+        // Only Operation Manager, Admin, and Parking Dept can reject
         if (!PermissionHelper::canApprove()) {
             throw \CodeIgniter\Exceptions\PageNotFoundException::forPageNotFound();
         }
 
         $userRole = session()->get('role');
         $notes = $this->request->getPost('notes');
-        
-        $data = [
-            'status' => 'rejected'
-        ];
-        
+
+        $data = [];
+
         if ($userRole === 'operation_manager') {
             $data['operation_manager_approval'] = 'rejected';
             $data['operation_manager_id'] = session()->get('user_id');
             $data['operation_manager_notes'] = $notes;
             $data['operation_manager_approval_date'] = date('Y-m-d H:i:s');
-        } elseif ($userRole === 'admin') {
+        } elseif ($userRole === 'admin' || $userRole === 'parking_dept') {
             $data['parking_dept_approval'] = 'rejected';
             $data['parking_dept_id'] = session()->get('user_id');
             $data['parking_dept_notes'] = $notes;
             $data['parking_dept_approval_date'] = date('Y-m-d H:i:s');
         }
-        
+
+        // If anyone rejects, mark as rejected immediately
+        $data['status'] = 'rejected';
+
         if ($this->submissionModel->update($id, $data)) {
             return redirect()->back()->with('success', 'Pengajuan berhasil ditolak');
         } else {
@@ -192,14 +307,40 @@ class ParkingSubmissions extends BaseController
     private function uploadImage($fieldName)
     {
         $file = $this->request->getFile($fieldName);
-        
-        if ($file && $file->isValid() && !$file->hasMoved()) {
-            $newName = $file->getRandomName();
-            $file->move(ROOTPATH . 'public/uploads', $newName);
-            return $newName;
+
+        if (!$file) {
+            return null;
         }
-        
-        return null;
+
+        if (!$file->isValid()) {
+            log_message('error', 'File upload invalid for field: ' . $fieldName . ' - ' . $file->getErrorString());
+            return null;
+        }
+
+        if ($file->hasMoved()) {
+            log_message('error', 'File already moved for field: ' . $fieldName);
+            return null;
+        }
+
+        try {
+            $newName = $file->getRandomName();
+            $uploadPath = ROOTPATH . 'public/uploads';
+
+            // Ensure upload directory exists
+            if (!is_dir($uploadPath)) {
+                mkdir($uploadPath, 0755, true);
+            }
+
+            if (!$file->move($uploadPath, $newName)) {
+                log_message('error', 'Failed to move file for field: ' . $fieldName);
+                return null;
+            }
+
+            return $newName;
+        } catch (\Exception $e) {
+            log_message('error', 'Upload exception for field ' . $fieldName . ': ' . $e->getMessage());
+            return null;
+        }
     }
 
     // Tambahkan method ini ke ParkingSubmissions Controller
@@ -214,8 +355,9 @@ class ParkingSubmissions extends BaseController
         $userRole = session()->get('role');
 
         $builder = $this->submissionModel->builder();
-        $builder->select('parking_submissions.*, customers.full_name, customers.company, customers.nik, customers.phone, customers.email, vehicles.license_plate, vehicles.vehicle_type, vehicles.brand, vehicles.model, vehicles.color')
-                ->join('customers', 'customers.id = parking_submissions.customer_id')
+        $builder->select('parking_submissions.*, users.full_name as employee_name, customers.company, customers.nik, customers.phone, customers.email, vehicles.license_plate, vehicles.vehicle_type, vehicles.brand, vehicles.model, vehicles.color')
+                ->join('users', 'users.id = parking_submissions.submitted_by')
+                ->join('customers', 'customers.id = parking_submissions.customer_id', 'left')
                 ->join('vehicles', 'vehicles.id = parking_submissions.vehicle_id');
         
         if ($userRole === 'operation_manager') {
@@ -224,6 +366,11 @@ class ParkingSubmissions extends BaseController
         } elseif ($userRole === 'admin') {
             $builder->where('parking_submissions.operation_manager_approval', 'approved')
                     ->where('parking_submissions.parking_dept_approval', 'pending');
+        } elseif ($userRole === 'parking_dept') {
+            // Parking dept sees all submissions awaiting approval (both manager and parking dept)
+            $builder->where('parking_submissions.status', 'submitted')
+                    ->where('parking_submissions.parking_dept_approval', 'pending')
+                    ->whereIn('parking_submissions.operation_manager_approval', ['pending', 'approved']);
         }
         
         // Also include current month quota info for views
@@ -247,8 +394,9 @@ class ParkingSubmissions extends BaseController
     public function view($id)
     {
         $builder = $this->submissionModel->builder();
-        $submission = $builder->select('parking_submissions.*, customers.full_name as customer_name, customers.company, customers.nik, customers.phone, customers.email, vehicles.license_plate, vehicles.vehicle_type, vehicles.brand, vehicles.model, vehicles.color')
-                            ->join('customers', 'customers.id = parking_submissions.customer_id')
+        $submission = $builder->select('parking_submissions.*, users.full_name as employee_name, customers.company, customers.nik, customers.phone, customers.email, vehicles.license_plate, vehicles.vehicle_type, vehicles.brand, vehicles.model, vehicles.color')
+                            ->join('users', 'users.id = parking_submissions.submitted_by')
+                            ->join('customers', 'customers.id = parking_submissions.customer_id', 'left')
                             ->join('vehicles', 'vehicles.id = parking_submissions.vehicle_id')
                             ->where('parking_submissions.id', $id)
                             ->get()

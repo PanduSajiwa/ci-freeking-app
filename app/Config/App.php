@@ -18,7 +18,7 @@ class App extends BaseConfig
      *
      * Auto-detect: Works with localhost, ngrok, and any domain
      */
-    public string $baseURL = '';
+    public string $baseURL = 'http://localhost:8080/';
 
     /**
      * Allowed Hostnames in the Site URL other than the hostname in the baseURL.

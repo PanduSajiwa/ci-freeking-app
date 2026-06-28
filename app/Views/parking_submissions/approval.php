@@ -45,7 +45,7 @@
                             <?php foreach ($submissions as $submission): ?>
                             <tr>
                                 <td><?= $submission['submission_code'] ?></td>
-                                <td><?= $submission['full_name'] ?></td>
+                                <td><?= $submission['employee_name'] ?></td>
                                 <td><?= $submission['company'] ?></td>
                                 <td><?= $submission['license_plate'] ?></td>
                                 <td><?= $submission['submission_date'] ?></td>
@@ -53,16 +53,30 @@
                                 <td><?= substr($submission['purpose'], 0, 50) ?>...</td>
                                 <td>
                                     <?php
-                                    $badgeClass = [
-                                        'submitted' => 'warning',
-                                        'under_review' => 'info',
-                                        'approved' => 'success',
-                                        'rejected' => 'danger'
-                                    ][$submission['status']] ?? 'secondary';
+                                    // Show approval status for both manager and parking dept
+                                    $managerStatus = $submission['operation_manager_approval'] ?? 'pending';
+                                    $parkingStatus = $submission['parking_dept_approval'] ?? 'pending';
+
+                                    // Determine overall status badge
+                                    if ($managerStatus == 'rejected' || $parkingStatus == 'rejected') {
+                                        $badgeClass = 'danger';
+                                        $statusText = '✗ Rejected';
+                                    } elseif ($managerStatus == 'approved' && $parkingStatus == 'approved') {
+                                        $badgeClass = 'success';
+                                        $statusText = '✓✓ Approved';
+                                    } else {
+                                        $badgeClass = 'warning';
+                                        $statusText = '⏳ Pending';
+                                    }
                                     ?>
                                     <span class="badge badge-<?= $badgeClass ?>">
-                                        <?= ucfirst($submission['status']) ?>
+                                        <?= $statusText ?>
                                     </span>
+                                    <br>
+                                    <small style="display: block; margin-top: 4px;">
+                                        Manager: <strong><?= ucfirst($managerStatus) ?></strong> |
+                                        Parking: <strong><?= ucfirst($parkingStatus) ?></strong>
+                                    </small>
                                 </td>
                                 <td>
                                     <div class="btn-group">
@@ -77,6 +91,7 @@
                                             <i class="fas fa-times"></i> Reject
                                         </button>
                                         <?php elseif ($submission['parking_dept_approval'] == 'pending' && session()->get('role') == 'parking_dept'): ?>
+                                        <!-- Parking dept can approve anytime -->
                                         <button type="button" class="btn btn-success btn-sm" data-toggle="modal" data-target="#approveWithQuotaModal<?= $submission['id'] ?>">
                                             <i class="fas fa-check"></i> Beri Kuota
                                         </button>
@@ -111,7 +126,7 @@
                                         </div>
                                     </div>
 
-                                    <!-- Modal untuk Approve dengan Kuota (masukkan berapa slot yang digunakan) -->
+                                    <!-- Modal untuk Approve dengan Kuota -->
                                     <div class="modal fade" id="approveWithQuotaModal<?= $submission['id'] ?>">
                                         <div class="modal-dialog">
                                             <div class="modal-content">
@@ -119,20 +134,38 @@
                                                     <h4 class="modal-title">Berikan Kuota Parkir</h4>
                                                     <button type="button" class="close" data-dismiss="modal">&times;</button>
                                                 </div>
-                                                <form action="<?= base_url('/parkingsubmissions/approve/' . $submission['id']) ?>" method="post">
-                                                    <?= csrf_field() ?>
-                                                    <div class="modal-body">
+                                                <div class="modal-body">
+                                                    <!-- Show approval status -->
+                                                    <div class="alert alert-info">
+                                                        <strong>Status Approval:</strong><br>
+                                                        Manager: <span class="badge badge-<?= $submission['operation_manager_approval'] == 'approved' ? 'success' : 'warning' ?>">
+                                                            <?= ucfirst($submission['operation_manager_approval']) ?>
+                                                        </span><br>
+                                                        Parking Dept: <span class="badge badge-<?= $submission['parking_dept_approval'] == 'approved' ? 'success' : 'warning' ?>">
+                                                            <?= ucfirst($submission['parking_dept_approval']) ?>
+                                                        </span>
+                                                    </div>
+
+                                                    <?php if ($submission['operation_manager_approval'] != 'approved'): ?>
+                                                    <div class="alert alert-warning">
+                                                        <i class="fas fa-exclamation-circle"></i>
+                                                        <strong>Catatan:</strong> Manager belum memberikan approval. Anda dapat memberikan kuota sekarang, tapi approval final memerlukan kedua pihak.
+                                                    </div>
+                                                    <?php endif; ?>
+
+                                                    <form action="<?= base_url('/parkingsubmissions/approve/' . $submission['id']) ?>" method="post">
+                                                        <?= csrf_field() ?>
                                                         <div class="form-group">
                                                             <label>Jumlah slot kuota yang diberikan</label>
                                                             <input type="number" name="quota_given" class="form-control" min="1" value="1" required>
                                                             <small class="text-muted">Masukkan jumlah slot parkir yang ingin diberikan.</small>
                                                         </div>
-                                                    </div>
-                                                    <div class="modal-footer">
-                                                        <button type="submit" class="btn btn-success">Setujui & Pakai Kuota</button>
-                                                        <button type="button" class="btn btn-default" data-dismiss="modal">Batal</button>
-                                                    </div>
-                                                </form>
+                                                        <div class="modal-footer">
+                                                            <button type="submit" class="btn btn-success">Setujui & Pakai Kuota</button>
+                                                            <button type="button" class="btn btn-default" data-dismiss="modal">Batal</button>
+                                                        </div>
+                                                    </form>
+                                                </div>
                                             </div>
                                         </div>
                                     </div>

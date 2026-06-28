@@ -38,7 +38,6 @@
                         <thead>
                             <tr>
                                 <th>Kode</th>
-                                <th>Karyawan</th>
                                 <th>Plat Nomor</th>
                                 <th>Tanggal</th>
                                 <th>Durasi</th>
@@ -50,7 +49,6 @@
                             <?php foreach ($submissions as $submission): ?>
                             <tr>
                                 <td><?= $submission['submission_code'] ?></td>
-                                <td><?= $submission['customer_name'] ?></td>
                                 <td><?= $submission['license_plate'] ?></td>
                                 <td><?= date('d/m/Y', strtotime($submission['submission_date'])) ?></td>
                                 <td><?= $submission['duration_days'] ?> hari</td>

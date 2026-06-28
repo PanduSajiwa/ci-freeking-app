@@ -69,7 +69,7 @@
                                 </tr>
                                 <tr>
                                     <th>Nama Lengkap</th>
-                                    <td><?= $submission['customer_name'] ?></td>
+                                    <td><?= $submission['employee_name'] ?></td>
                                 </tr>
                                 <tr>
                                     <th>Perusahaan</th>

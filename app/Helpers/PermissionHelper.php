@@ -53,7 +53,7 @@ class PermissionHelper
      */
     public static function canApprove()
     {
-        return in_array(session()->get('role'), ['operation_manager', 'admin']);
+        return in_array(session()->get('role'), ['operation_manager', 'admin', 'parking_dept']);
     }
 
     /**
@@ -98,7 +98,7 @@ class PermissionHelper
      */
     public static function canViewReports()
     {
-        return session()->get('role') === 'admin';
+        return in_array(session()->get('role'), ['admin', 'parking_dept']);
     }
 
     /**
@@ -107,7 +107,7 @@ class PermissionHelper
      */
     public static function canManageCustomers()
     {
-        return in_array(session()->get('role'), ['employee', 'admin']);
+        return in_array(session()->get('role'), ['employee', 'admin', 'parking_dept']);
     }
 
     /**
